@@ -23,7 +23,7 @@ patch_core \
 --anomaly_scorer_num_nn 1 \
 --patchsize 3 \
 --use_pseudo_negatives \
---pseudo_negative_ratio 0.08 \
+--pseudo_negative_ratio 0.1 \
 --pseudo_negative_temperature 0.07 \
 --pseudo_negative_weight 1.2 \
     sampler \
@@ -41,4 +41,5 @@ dataset \
 - `--pseudo_negative_temperature`: 控制“离异常记忆库越近”得分的陡峭程度，值越小越强调异常记忆。
 - `--pseudo_negative_weight` 与 `--normal_memory_weight`: 控制正常记忆库与异常记忆库得分的融合权重，可微调以兼顾漏检率与过杀率。
 - 训练日志会输出 `Identified X pseudo-anomalous images...` 与样例路径，帮助排查 `good` 集被污染的比例，这通常是漏检率、过杀率升高的根本原因。
+
 

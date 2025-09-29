@@ -1,0 +1,44 @@
+# train:
+    # 环境变量
+    export PYTHONPATH=src
+
+    # MVTec 数据集路径
+    datapath=/data/c425/cx/Patchcore_net/datasets/mvtec_anomaly_detection/mvtec_anomaly_detection/
+    datasets=('bottle'  'cable'  'capsule'  'carpet'  'grid'  'hazelnut' 'leather'  'metal_nut'  'pill' 'screw' 'tile' 'toothbrush' 'transistor' 'wood' 'zipper' 'bupi' 'user3')
+    dataset_flags=($(for dataset in "${datasets[@]}"; do echo '-d '"${dataset}"; done))
+
+python bin/run_patchcore_user.py \
+--gpu 0 \
+--seed 22 \
+--save_patchcore_model \
+--log_group IM320_WR50_L2-3_P001_D1024-1024_PS-3_AN-1_S22 \
+--log_project MVTecAD_Results results \
+patch_core \
+-b wideresnet50 \
+-le layer2 \
+-le layer3 \
+--faiss_on_gpu \
+--pretrain_embed_dimension 1024  \
+--target_embed_dimension 1024 \
+--anomaly_scorer_num_nn 1 \
+--patchsize 3 \
+--use_pseudo_negatives \
+--pseudo_negative_ratio 0.08 \
+--pseudo_negative_temperature 0.07 \
+--pseudo_negative_weight 1.2 \
+    sampler \
+-p 0.01 \
+approx_greedy_coreset \
+dataset \
+-d user3 \
+--resize 366 \
+--imagesize 320 \
+ custom $datapath
+
+## 伪异常记忆库开关说明
+- `--use_pseudo_negatives`: 启用伪异常挖掘，自动在训练集 `good` 文件夹中寻找离群图像并建立异常记忆库。
+- `--pseudo_negative_ratio`: 约有多少比例的训练图像被视为伪异常，建议范围 0.05~0.15。
+- `--pseudo_negative_temperature`: 控制“离异常记忆库越近”得分的陡峭程度，值越小越强调异常记忆。
+- `--pseudo_negative_weight` 与 `--normal_memory_weight`: 控制正常记忆库与异常记忆库得分的融合权重，可微调以兼顾漏检率与过杀率。
+- 训练日志会输出 `Identified X pseudo-anomalous images...` 与样例路径，帮助排查 `good` 集被污染的比例，这通常是漏检率、过杀率升高的根本原因。
+

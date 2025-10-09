@@ -9,7 +9,7 @@
 
 python bin/run_patchcore_user.py \
 --gpu 0 \
---seed 22 \
+--seed 0 \
 --save_patchcore_model \
 --log_group IM320_WR50_L2-3_P001_D1024-1024_PS-3_AN-1_S22 \
 --log_project MVTecAD_Results results \
@@ -27,12 +27,12 @@ patch_core \
 --pseudo_negative_temperature 0.07 \
 --pseudo_negative_weight 1.2 \
     sampler \
--p 0.01 \
+-p 0.1 \
 approx_greedy_coreset \
 dataset \
 -d user3 \
---resize 366 \
---imagesize 320 \
+--resize 256 \
+--imagesize 224 \
  custom $datapath
 
 ## 伪异常记忆库开关说明
@@ -41,5 +41,6 @@ dataset \
 - `--pseudo_negative_temperature`: 控制“离异常记忆库越近”得分的陡峭程度，值越小越强调异常记忆。
 - `--pseudo_negative_weight` 与 `--normal_memory_weight`: 控制正常记忆库与异常记忆库得分的融合权重，可微调以兼顾漏检率与过杀率。
 - 训练日志会输出 `Identified X pseudo-anomalous images...` 与样例路径，帮助排查 `good` 集被污染的比例，这通常是漏检率、过杀率升高的根本原因。
+
 
 

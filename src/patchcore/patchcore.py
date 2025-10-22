@@ -13,6 +13,7 @@ import patchcore.contamination as contamination
 import patchcore
 import patchcore.backbones
 import patchcore.common
+import patchcore.yvmm
 import patchcore.sampler
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class PatchCore(torch.nn.Module):
         self.dual_memory = contamination.ReciprocalDualMemoryDistillation()
         self.dashboard = contamination.ContaminationDashboard()
         self._current_gamma = 0.0
+        self.yvmm_module = None
 
     def load(
         self,
@@ -138,6 +140,20 @@ class PatchCore(torch.nn.Module):
         self._current_gamma = 0.0
         self.contamination_controller = None
         self.closed_loop_controller = None
+        yvmm_config = kwargs.pop("yvmm_config", None)
+        if yvmm_config is not None:
+            if isinstance(yvmm_config, dict):
+                config = patchcore.yvmm.YarnVoxelConfig(**yvmm_config)
+            elif isinstance(yvmm_config, patchcore.yvmm.YarnVoxelConfig):
+                config = yvmm_config
+            else:
+                raise TypeError(
+                    "yvmm_config must be a dict or YarnVoxelConfig instance"
+                )
+            self.yvmm_module = patchcore.yvmm.YarnVoxelManifoldMapping(
+                self.target_embed_dimension, config
+            ).to(self.device)
+            self.forward_modules["yvmm_module"] = self.yvmm_module
         if self.enable_contamination_elasticity:
             self.contamination_controller = contamination.ContaminationElasticityController(
                 feature_dim=self.target_embed_dimension,
@@ -219,6 +235,10 @@ class PatchCore(torch.nn.Module):
         features = self.forward_modules["preprocessing"](features)
         features = self.forward_modules["preadapt_aggregator"](features)
 
+        if self.yvmm_module is not None:
+            batchsize = images.shape[0]
+            features = self.yvmm_module(features, patch_shapes[0], batchsize)
+
         if provide_patch_shapes:
             return _detach(features), patch_shapes
         return _detach(features)
@@ -230,6 +250,18 @@ class PatchCore(torch.nn.Module):
         memory bank of SPADE.
         """
         self._fill_memory_bank(training_data)
+        if self.yvmm_module is not None and hasattr(self.yvmm_module, "last_residual_norm"):
+            try:
+                residual = float(self.yvmm_module.last_residual_norm.item())
+                fold_energy = float(self.yvmm_module.last_fold_energy.item())
+                LOGGER.info(
+                    "YVMM 诊断: 残差范数 %.4f, 折叠能量 %.4f. 可通过调整"
+                    " --yvmm_residual_mix / --yvmm_fold_scale 优化。",
+                    residual,
+                    fold_energy,
+                )
+            except (RuntimeError, AttributeError):
+                LOGGER.debug("Failed to read YVMM diagnostics after training.")
 
     def _fill_memory_bank(self, input_data):
         """Computes and sets the support features for SPADE."""

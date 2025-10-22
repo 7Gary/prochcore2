@@ -457,6 +457,60 @@ def run(
     show_default=True,
     help="Minimum ratio of clean patches required to recycle a contaminated image.",
 )
+@click.option(
+    "--enable_yvmm",
+    is_flag=True,
+    help="Enable yarn voxel manifold mapping augmentation for textile scenarios.",
+)
+@click.option(
+    "--yvmm_depth",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Depth of the yarn voxel volume (>=2).",
+)
+@click.option(
+    "--yvmm_hidden_channels",
+    type=int,
+    default=64,
+    show_default=True,
+    help="Hidden channels for the voxel manifold encoder.",
+)
+@click.option(
+    "--yvmm_fusion_hidden",
+    type=int,
+    default=128,
+    show_default=True,
+    help="Hidden dimension of the fusion MLP that mixes manifold cues.",
+)
+@click.option(
+    "--yvmm_stability_eps",
+    type=float,
+    default=1e-6,
+    show_default=True,
+    help="Stability epsilon used when computing fold energy.",
+)
+@click.option(
+    "--yvmm_encoded_scale",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Scale factor applied to manifold encoded features before fusion.",
+)
+@click.option(
+    "--yvmm_fold_scale",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Scale factor applied to fold energy responses before fusion.",
+)
+@click.option(
+    "--yvmm_residual_mix",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Residual mixing weight; <1 降低影响, >1 放大纱线体素增益.",
+)
 def patch_core(
     backbone_names,
     layers_to_extract_from,
@@ -481,6 +535,14 @@ def patch_core(
     normal_memory_weight,
     clean_patch_quantile,
     clean_patch_min_ratio,
+    enable_yvmm,
+    yvmm_depth,
+    yvmm_hidden_channels,
+    yvmm_fusion_hidden,
+    yvmm_stability_eps,
+    yvmm_encoded_scale,
+    yvmm_fold_scale,
+    yvmm_residual_mix,
 ):
     backbone_names = list(backbone_names)
     if len(backbone_names) > 1:
@@ -508,6 +570,17 @@ def patch_core(
             nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers)
 
             patchcore_instance = patchcore.patchcore.PatchCore(device)
+            yvmm_config = None
+            if enable_yvmm:
+                yvmm_config = {
+                    "depth": yvmm_depth,
+                    "hidden_channels": yvmm_hidden_channels,
+                    "fusion_hidden": yvmm_fusion_hidden,
+                    "stability_eps": yvmm_stability_eps,
+                    "encoded_scale": yvmm_encoded_scale,
+                    "fold_scale": yvmm_fold_scale,
+                    "residual_mix": yvmm_residual_mix,
+                }
             patchcore_instance.load(
                 backbone=backbone,
                 layers_to_extract_from=layers_to_extract_from,
@@ -529,6 +602,7 @@ def patch_core(
                 normal_memory_weight=normal_memory_weight,
                 clean_patch_quantile=clean_patch_quantile,
                 clean_patch_min_ratio=clean_patch_min_ratio,
+                yvmm_config=yvmm_config,
             )
             loaded_patchcores.append(patchcore_instance)
         return loaded_patchcores

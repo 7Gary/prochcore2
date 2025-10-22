@@ -19,28 +19,27 @@ patch_core \
 -le layer3 \
 --faiss_on_gpu \
 --pretrain_embed_dimension 1024  \
---target_embed_dimension 1024 \
+--target_embed_dimension 768 \
 --anomaly_scorer_num_nn 1 \
 --patchsize 3 \
---use_pseudo_negatives \
---pseudo_negative_ratio 0.1 \
---pseudo_negative_temperature 0.07 \
---pseudo_negative_weight 1.2 \
+--enable_yvmm \
+--yvmm_depth 5 \
+--yvmm_hidden_channels 64 \
+--yvmm_fusion_hidden 128 \
+--yvmm_stability_eps 1e-6 \
+--yvmm_encoded_scale 0.8 \
+--yvmm_fold_scale 0.2 \
+--yvmm_residual_mix 0.7 \
     sampler \
 -p 0.1 \
 approx_greedy_coreset \
 dataset \
 -d user3 \
 --resize 256 \
---imagesize 224 \
+--imagesize 256 \
+--augment \
  custom $datapath
 
-## 伪异常记忆库开关说明
-- `--use_pseudo_negatives`: 启用伪异常挖掘，自动在训练集 `good` 文件夹中寻找离群图像并建立异常记忆库。
-- `--pseudo_negative_ratio`: 约有多少比例的训练图像被视为伪异常，建议范围 0.05~0.15。
-- `--pseudo_negative_temperature`: 控制“离异常记忆库越近”得分的陡峭程度，值越小越强调异常记忆。
-- `--pseudo_negative_weight` 与 `--normal_memory_weight`: 控制正常记忆库与异常记忆库得分的融合权重，可微调以兼顾漏检率与过杀率。
-- 训练日志会输出 `Identified X pseudo-anomalous images...` 与样例路径，帮助排查 `good` 集被污染的比例，这通常是漏检率、过杀率升高的根本原因。
 
 
 

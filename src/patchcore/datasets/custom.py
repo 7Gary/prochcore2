@@ -22,19 +22,17 @@ class DatasetSplit(Enum):
 
 
 class CustomDataset(torch.utils.data.Dataset):
-    """
-    PyTorch Dataset for custom datasets without ground truth masks.
-    """
+    """PyTorch Dataset for custom datasets without ground truth masks."""
 
     def __init__(
-            self,
-            source,
-            classname,
-            resize=256,
-            imagesize=224,
-            split=DatasetSplit.TRAIN,
-            train_val_split=1.0,
-            **kwargs,
+        self,
+        source,
+        classname,
+        resize=256,
+        imagesize=224,
+        split=DatasetSplit.TRAIN,
+        train_val_split=1.0,
+        **kwargs,
     ):
         """
         Args:
@@ -57,44 +55,77 @@ class CustomDataset(torch.utils.data.Dataset):
 
         self.imgpaths_per_class, self.data_to_iterate = self.get_image_data()
 
-        self.transform_img = [
-            transforms.Resize(resize),
-            transforms.CenterCrop(imagesize),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        ]
-        self.transform_img = transforms.Compose(self.transform_img)
+        self.transform_mean = IMAGENET_MEAN
+        self.transform_std = IMAGENET_STD
+
+        self.transform_img = transforms.Compose(
+            [
+                transforms.Resize(resize),
+                transforms.CenterCrop(imagesize),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=self.transform_mean, std=self.transform_std),
+            ]
+        )
+
+        nearest_interp = (
+            transforms.InterpolationMode.NEAREST
+            if hasattr(transforms, "InterpolationMode")
+            else PIL.Image.NEAREST
+        )
+        self.transform_mask = transforms.Compose(
+            [
+                transforms.Resize(resize, interpolation=nearest_interp),
+                transforms.CenterCrop(imagesize),
+                transforms.ToTensor(),
+            ]
+        )
 
         self.imagesize = (3, imagesize, imagesize)
 
+        self.tile_suffixes = ["_left", "_right"]
+        self.tiles_per_image = len(self.tile_suffixes)
+
+    def _compute_tile_bboxes(self, width, height):
+        base_width = width // self.tiles_per_image
+        remainder = width % self.tiles_per_image
+        bboxes = []
+        left = 0
+        for index in range(self.tiles_per_image):
+            extra = 1 if index < remainder else 0
+            right = left + base_width + extra
+            if index == self.tiles_per_image - 1:
+                right = width
+            bboxes.append((left, 0, right, height))
+            left = right
+        return bboxes
+
+    def split_pil_image(self, pil_image):
+        width, height = pil_image.size
+        return [pil_image.crop(bbox) for bbox in self._compute_tile_bboxes(width, height)]
+
+    def _get_tile_suffix(self, slice_idx):
+        if 0 <= slice_idx < len(self.tile_suffixes):
+            return self.tile_suffixes[slice_idx]
+        return f"_tile{slice_idx}"
+
     def __getitem__(self, idx):
-        # 计算原始图像索引和切片索引
-        orig_idx = idx // 2
-        slice_idx = idx % 2  # 0=左切片, 1=右切片
+        orig_idx = idx // self.tiles_per_image
+        slice_idx = idx % self.tiles_per_image
 
         classname, anomaly, image_path, mask_path = self.data_to_iterate[orig_idx]
         full_image = PIL.Image.open(image_path).convert("RGB")
-
-        # 定义两个切片的边界框
-        if slice_idx == 0:  # 左切片
-            bbox = (0, 0, 1024, 1024)
-        else:  # 右切片
-            bbox = (1024, 0, 2048, 1024)
-
-        # 裁剪图像
-        tile = full_image.crop(bbox)
+        tiles = self.split_pil_image(full_image)
+        tile = tiles[slice_idx]
         image = self.transform_img(tile)
 
-        # 处理掩码
         if self.split == DatasetSplit.TEST and mask_path is not None:
             full_mask = PIL.Image.open(mask_path)
-            mask = full_mask.crop(bbox)
-            mask = self.transform_mask(mask)
+            mask_tiles = self.split_pil_image(full_mask)
+            mask = self.transform_mask(mask_tiles[slice_idx])
         else:
             mask = torch.zeros([1, *image.size()[1:]])
 
-        # 添加切片标识到图像名称
-        slice_suffix = "_left" if slice_idx == 0 else "_right"
+        slice_suffix = self._get_tile_suffix(slice_idx)
         image_name = "/".join(image_path.split("/")[-4:]) + slice_suffix
 
         return {
@@ -107,18 +138,8 @@ class CustomDataset(torch.utils.data.Dataset):
             "image_path": image_path,
         }
 
-        # return {
-        #     "image": image,
-        #     "mask": mask,
-        #     "classname": classname,
-        #     "anomaly": anomaly,
-        #     "is_anomaly": int(anomaly != "good"),
-        #     "image_name": "/".join(image_path.split("/")[-4:]),
-        #     "image_path": image_path,
-        # }
-
     def __len__(self):
-        return len(self.data_to_iterate) * 2
+        return len(self.data_to_iterate) * self.tiles_per_image
 
     def get_image_data(self):
         imgpaths_per_class = {}

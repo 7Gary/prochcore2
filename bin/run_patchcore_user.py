@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 import logging
 import os
 import sys
@@ -177,65 +178,133 @@ def run(
             segmentations = (segmentations - min_scores) / (max_scores - min_scores)
             segmentations = np.mean(segmentations, axis=0)
 
+            dataset = dataloaders["testing"].dataset
+            tile_suffixes = getattr(dataset, "tile_suffixes", [])
+            tiles_per_image = getattr(dataset, "tiles_per_image", 1)
+
             image_names = np.array(aggregator.get("image_names") or [], dtype=object)
             image_paths = np.array(aggregator.get("image_paths") or [], dtype=object)
 
-            anomaly_labels = [
-                x[1] != "good" for x in dataloaders["testing"].dataset.data_to_iterate
-            ]
+            data_entries = dataset.data_to_iterate
+            mask_paths = [entry[3] for entry in data_entries]
+            masks_available = any(path is not None for path in mask_paths)
+
+            if tiles_per_image > 1 and len(segmentations) % tiles_per_image == 0:
+                tile_segmentations = segmentations.reshape(
+                    -1, tiles_per_image, *segmentations.shape[1:]
+                )
+                tile_scores = scores.reshape(-1, tiles_per_image)
+
+                per_image_segmentations = []
+                per_image_scores = []
+                per_image_paths = []
+                per_image_names = []
+
+                for idx in range(tile_segmentations.shape[0]):
+                    tile_stack = tile_segmentations[idx]
+                    merged_map = np.concatenate(
+                        [np.asarray(tile) for tile in tile_stack], axis=-1
+                    )
+                    per_image_segmentations.append(merged_map)
+                    per_image_scores.append(float(np.max(tile_scores[idx])))
+
+                    if image_paths.size:
+                        per_image_paths.append(image_paths[idx * tiles_per_image])
+                    else:
+                        per_image_paths.append(data_entries[idx][2])
+
+                    if image_names.size:
+                        base_name = image_names[idx * tiles_per_image]
+                        if isinstance(base_name, str):
+                            for suffix in tile_suffixes:
+                                if base_name.endswith(suffix):
+                                    base_name = base_name[: -len(suffix)]
+                                    break
+                        per_image_names.append(base_name)
+                    else:
+                        per_image_names.append(None)
+
+                segmentations = np.array(per_image_segmentations)
+                scores = np.array(per_image_scores)
+                image_paths = np.array(per_image_paths, dtype=object)
+                image_names = np.array(per_image_names, dtype=object)
+            else:
+                if not image_paths.size:
+                    image_paths = np.array([entry[2] for entry in data_entries], dtype=object)
+                if not image_names.size:
+                    image_names = np.array([None] * len(image_paths), dtype=object)
+
+            anomaly_labels = [entry[1] != "good" for entry in data_entries]
 
             # (Optional) Plot example images.
             if save_segmentation_images:
-                image_paths = [
-                    x[2] for x in dataloaders["testing"].dataset.data_to_iterate
-                ]
-                mask_paths = [
-                    x[3] for x in dataloaders["testing"].dataset.data_to_iterate
-                ]
+                channel_std = np.array(dataset.transform_std).reshape(-1, 1, 1)
+                channel_mean = np.array(dataset.transform_mean).reshape(-1, 1, 1)
 
                 def image_transform(image):
-                    in_std = np.array(
-                        dataloaders["testing"].dataset.transform_std
-                    ).reshape(-1, 1, 1)
-                    in_mean = np.array(
-                        dataloaders["testing"].dataset.transform_mean
-                    ).reshape(-1, 1, 1)
-                    image = dataloaders["testing"].dataset.transform_img(image)
-                    return np.clip(
-                        (image.numpy() * in_std + in_mean) * 255, 0, 255
-                    ).astype(np.uint8)
+                    tiles = dataset.split_pil_image(image.convert("RGB"))
+                    tile_arrays = []
+                    for tile in tiles:
+                        tile_tensor = dataset.transform_img(tile)
+                        tile_array = tile_tensor.detach().cpu().numpy()
+                        tile_array = tile_array * channel_std + channel_mean
+                        tile_arrays.append(tile_array)
+                    if not tile_arrays:
+                        return np.zeros(dataset.imagesize, dtype=np.float32)
+                    stitched = tile_arrays[0]
+                    if len(tile_arrays) > 1:
+                        stitched = np.concatenate(tile_arrays, axis=-1)
+                    return np.clip(stitched, 0.0, 1.0)
 
                 def mask_transform(mask):
-                    return dataloaders["testing"].dataset.transform_mask(mask).numpy()
+                    tiles = dataset.split_pil_image(mask)
+                    mask_arrays = []
+                    for tile in tiles:
+                        mask_tensor = dataset.transform_mask(tile)
+                        mask_array = mask_tensor.detach().cpu().numpy()
+                        mask_arrays.append(mask_array)
+                    if not mask_arrays:
+                        return np.zeros(
+                            (1, dataset.imagesize[1], dataset.imagesize[2]), dtype=np.float32
+                        )
+                    stitched = mask_arrays[0]
+                    if len(mask_arrays) > 1:
+                        stitched = np.concatenate(mask_arrays, axis=-1)
+                    return stitched
 
                 image_save_path = os.path.join(
                     run_save_path, "segmentation_images", dataset_name
                 )
                 os.makedirs(image_save_path, exist_ok=True)
-                patchcore.utils.plot_segmentation_images(
-                    image_save_path,
-                    image_paths,
-                    segmentations,
-                    scores,
-                    mask_paths,
+                plot_kwargs = dict(
+                    savefolder=image_save_path,
+                    image_paths=image_paths.tolist(),
+                    segmentations=segmentations,
+                    anomaly_scores=scores,
+                    mask_paths=mask_paths if masks_available else None,
                     image_transform=image_transform,
                     mask_transform=mask_transform,
                 )
-            reshaped_scores = scores.reshape(-1, 2)
+                try:
+                    signature = inspect.signature(
+                        patchcore.utils.plot_segmentation_images
+                    )
+                except (TypeError, ValueError):
+                    signature = None
 
-            # 使用最大值或平均值聚合
-            scores = np.max(reshaped_scores, axis=1)  # 或 np.mean
+                if signature is None or "file_extension" in signature.parameters:
+                    plot_kwargs["file_extension"] = "png"
 
-            if image_paths.size:
-                image_paths = image_paths.reshape(-1, 2)
-                base_image_paths = [pair[0] for pair in image_paths.tolist()]
-            else:
-                base_image_paths = [None] * len(scores)
-            if image_names.size:
-                image_names = image_names.reshape(-1, 2)
-                base_image_names = [pair[0] for pair in image_names.tolist()]
-            else:
-                base_image_names = [None] * len(scores)
+                saved_paths = patchcore.utils.plot_segmentation_images(**plot_kwargs)
+                if saved_paths:
+                    LOGGER.info(
+                        "示例可视化结果已保存到: %s 等，共 %d 张。",
+                        saved_paths[0],
+                        len(saved_paths),
+                    )
+
+            base_image_paths = image_paths.tolist()
+            base_image_names = image_names.tolist()
 
             LOGGER.info("Computing evaluation metrics.")
             imagewise_metrics = patchcore.metrics.compute_imagewise_retrieval_metrics(

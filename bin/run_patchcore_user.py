@@ -5,6 +5,7 @@ import os
 import sys
 import click
 import numpy as np
+import pandas as pd
 import torch
 
 import patchcore.backbones
@@ -65,6 +66,7 @@ def run(
     )
 
     result_collect = []
+    detection_results_all = []
 
     for dataloader_count, dataloaders in enumerate(list_of_dataloaders):
         LOGGER.info(
@@ -360,13 +362,7 @@ def run(
                 else:
                     predicted_records.append(f"index_{idx}")
 
-            # if predicted_records:
-            #     LOGGER.info(
-            #         "预测为异常的样本路径列表: %s",
-            #         " | ".join(predicted_records),
-            #     )
-            # else:
-            #     LOGGER.info("预测为异常的样本路径列表: 无")
+
 
             contamination_ratio = 0.0
             recovered_patches = 0
@@ -414,6 +410,23 @@ def run(
             for key, item in result_collect[-1].items():
                 if key != "dataset_name":
                     LOGGER.info("{0}: {1:3.3f}".format(key, item))
+            for idx, score in enumerate(scores):
+                image_path = base_image_paths[idx] if idx < len(base_image_paths) else None
+                image_name = base_image_names[idx] if idx < len(base_image_names) else None
+                anomaly_flag = bool(anomaly_labels[idx])
+                detection_results_all.append(
+                    {
+                        "dataset": dataset_name,
+                        "image_path": str(image_path) if image_path else "",
+                        "image_name": str(image_name) if image_name else "",
+                        "ground_truth_label": "anomaly" if anomaly_flag else "good",
+                        "ground_truth_binary": int(anomaly_flag),
+                        "predicted_label": "anomaly" if y_pred[idx] == 1 else "good",
+                        "predicted_binary": int(y_pred[idx]),
+                        "anomaly_score": float(score),
+                        "best_threshold": float(best_threshold),
+                    }
+                )
 
             # (Optional) Store PatchCore model for later re-use.
             # SAVE all patchcores only if mean_threshold is passed?
@@ -442,6 +455,11 @@ def run(
         column_names=result_metric_names,
         row_names=result_dataset_names,
     )
+    if detection_results_all:
+        excel_save_path = os.path.join(run_save_path, "detection_results.xlsx")
+        detection_df = pd.DataFrame(detection_results_all)
+        detection_df.to_excel(excel_save_path, index=False)
+        LOGGER.info("检测结果明细已保存到 Excel 文件: %s", excel_save_path)
 
 
 @main.command("patch_core")
